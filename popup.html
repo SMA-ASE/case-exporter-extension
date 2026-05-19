@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Salesforce Case Exporter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #1a1a1a;
+      background: #fff;
+      width: 320px;
+      padding: 16px;
+    }
+
+    h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #032d60;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    h1::before {
+      content: "";
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      background: #032d60;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: #444;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: #777;
+      margin-top: 2px;
+      margin-bottom: 10px;
+    }
+
+    input[type="number"] {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid #d0d5dd;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="number"]:focus { border-color: #0176d3; }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    #exportBtn {
+      background: #0176d3;
+      color: #fff;
+    }
+
+    #exportBtn:hover:not(:disabled) { background: #014486; }
+    #exportBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    #cancelBtn {
+      background: #f3f3f3;
+      color: #333;
+      display: none;
+    }
+
+    #cancelBtn:hover { background: #e5e5e5; }
+
+    /* Pagination warning */
+    #paginationWarning {
+      display: none;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #856404;
+      line-height: 1.4;
+    }
+
+    /* Progress */
+    #progressSection {
+      margin-top: 12px;
+      display: none;
+    }
+
+    #statusText {
+      font-size: 12px;
+      color: #444;
+      margin-bottom: 5px;
+      min-height: 16px;
+    }
+
+    .progress-track {
+      background: #e8edf2;
+      border-radius: 999px;
+      height: 6px;
+      overflow: hidden;
+    }
+
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: #0176d3;
+      border-radius: 999px;
+      transition: width 0.2s ease;
+    }
+
+    /* Error */
+    #errorBox {
+      display: none;
+      background: #fef3f2;
+      border: 1px solid #fca5a5;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #991b1b;
+      line-height: 1.4;
+    }
+
+    /* Success */
+    #successBox {
+      display: none;
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #166534;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h1>Case Exporter</h1>
+
+  <label for="caseLimit">Cases to export</label>
+  <input type="number" id="caseLimit" min="1" max="100" placeholder="All visible (leave blank)" />
+  <p class="hint">Leave blank to export all visible cases. Maximum 100.</p>
+
+  <div class="btn-row">
+    <button id="exportBtn">Export Cases</button>
+    <button id="cancelBtn">Cancel</button>
+  </div>
+
+  <div id="paginationWarning"></div>
+  <div id="errorBox"></div>
+  <div id="successBox"></div>
+
+  <div id="progressSection">
+    <div id="statusText"></div>
+    <div class="progress-track">
+      <div id="progressBar"></div>
+    </div>
+  </div>
+
+  <script src="jszip.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

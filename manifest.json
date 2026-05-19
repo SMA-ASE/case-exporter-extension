@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Salesforce Case Exporter",
+  "version": "1.0.0",
+  "description": "Export Salesforce support cases from a Case List View to a downloadable zip of JSON files.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://*.salesforce.com/*",
+    "https://*.lightning.force.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.salesforce.com/*",
+        "https://*.lightning.force.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Salesforce Case Exporter"
+  }
+}
