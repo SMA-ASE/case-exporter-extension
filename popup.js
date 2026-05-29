@@ -116,14 +116,14 @@ let cancelled = false;
 // flag needed; the session ID from the cookie is sent as a Bearer token.
 // ---------------------------------------------------------------------------
 
-async function fetchCase(orgPrefix, caseId, sessionId) {
-  const url = `https://${orgPrefix}.my.salesforce.com/services/data/v57.0/sobjects/Case/${caseId}`;
+async function sfGet(orgPrefix, pathOrUrl, sessionId) {
+  const url = pathOrUrl.startsWith('http')
+    ? pathOrUrl
+    : `https://${orgPrefix}.my.salesforce.com${pathOrUrl}`;
   const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${sessionId}` },
   });
-
   if (!response.ok) {
-    // Parse Salesforce's error body for a precise error code
     let sfError = `HTTP ${response.status}`;
     try {
       const body = await response.json();
@@ -131,15 +131,109 @@ async function fetchCase(orgPrefix, caseId, sessionId) {
         sfError = `${body[0].errorCode}: ${body[0].message}`;
       }
     } catch (_) {}
-
-    console.warn('[CaseExporter] API error for', caseId, sfError);
-
     if (response.status === 401) throw new Error(`SESSION_EXPIRED (${sfError})`);
     if (response.status === 403) throw new Error(`ACCESS_DENIED (${sfError})`);
     throw new Error(sfError);
   }
-
   return response.json();
+}
+
+async function fetchCase(orgPrefix, caseId, sessionId) {
+  return sfGet(orgPrefix, `/services/data/v57.0/sobjects/Case/${caseId}`, sessionId);
+}
+
+// Follows nextRecordsUrl until exhausted; returns flat array of all records.
+async function fetchAllSoqlPages(orgPrefix, soql, sessionId) {
+  let result = await sfGet(
+    orgPrefix,
+    `/services/data/v57.0/query?q=${encodeURIComponent(soql)}`,
+    sessionId
+  );
+  const records = [...result.records];
+  while (result.nextRecordsUrl) {
+    result = await sfGet(orgPrefix, result.nextRecordsUrl, sessionId);
+    records.push(...result.records);
+  }
+  return records;
+}
+
+// Follows Chatter nextPageUrl until exhausted; returns flat array of elements.
+async function fetchAllChatterPages(orgPrefix, caseId, sessionId) {
+  let result = await sfGet(
+    orgPrefix,
+    `/services/data/v57.0/chatter/records/${caseId}/feed-elements?pageSize=100&sort=CreatedDateAsc`,
+    sessionId
+  );
+  const elements = [...(result.elements || [])];
+  while (result.nextPageUrl) {
+    result = await sfGet(orgPrefix, result.nextPageUrl, sessionId);
+    elements.push(...(result.elements || []));
+  }
+  return elements;
+}
+
+// Fetches CaseComments, EmailMessages, and Chatter feed elements in parallel.
+// Individual failures are caught so a missing permission on one type does not
+// abort the whole export; the field is omitted from the output on failure.
+async function fetchCaseActivity(orgPrefix, caseId, sessionId) {
+  const [comments, emails, feed, files, attachments] = await Promise.allSettled([
+    fetchAllSoqlPages(
+      orgPrefix,
+      `SELECT Id, CommentBody, IsPublished, IsDeleted, CreatedDate, CreatedById, CreatedBy.Name, SystemModstamp ` +
+      `FROM CaseComment WHERE ParentId = '${caseId}' ORDER BY CreatedDate ASC`,
+      sessionId
+    ),
+    fetchAllSoqlPages(
+      orgPrefix,
+      `SELECT Id, Subject, TextBody, HtmlBody, FromAddress, FromName, ToAddress, CcAddress, BccAddress, ` +
+      `MessageDate, Status, Incoming, IsDeleted, CreatedDate, CreatedById ` +
+      `FROM EmailMessage WHERE ParentId = '${caseId}' ORDER BY MessageDate ASC`,
+      sessionId
+    ),
+    fetchAllChatterPages(orgPrefix, caseId, sessionId),
+    fetchAllSoqlPages(
+      orgPrefix,
+      `SELECT Id, ContentDocumentId, ContentDocument.Title, ContentDocument.FileExtension, ` +
+      `ContentDocument.ContentSize, ContentDocument.ContentModifiedDate, ` +
+      `ContentDocument.CreatedDate, ContentDocument.CreatedBy.Name, ShareType ` +
+      `FROM ContentDocumentLink WHERE LinkedEntityId = '${caseId}'`,
+      sessionId
+    ),
+    fetchAllSoqlPages(
+      orgPrefix,
+      `SELECT Id, Name, ContentType, BodyLength, Description, CreatedDate, CreatedById, CreatedBy.Name ` +
+      `FROM Attachment WHERE ParentId = '${caseId}' ORDER BY CreatedDate ASC`,
+      sessionId
+    ),
+  ]);
+
+  const activity = {};
+  if (comments.status === 'fulfilled') {
+    activity.caseComments = comments.value;
+  } else {
+    console.log('[CaseExporter] CaseComment fetch failed for', caseId, comments.reason?.message);
+  }
+  if (emails.status === 'fulfilled') {
+    activity.emailMessages = emails.value;
+  } else {
+    console.log('[CaseExporter] EmailMessage fetch failed for', caseId, emails.reason?.message);
+  }
+  if (feed.status === 'fulfilled') {
+    activity.feedElements = feed.value;
+  } else {
+    console.log('[CaseExporter] Chatter feed fetch failed for', caseId, feed.reason?.message);
+  }
+  if (files.status === 'fulfilled') {
+    activity.files = files.value;
+  } else {
+    console.log('[CaseExporter] ContentDocumentLink fetch failed for', caseId, files.reason?.message);
+  }
+  if (attachments.status === 'fulfilled') {
+    activity.attachments = attachments.value;
+  } else {
+    console.log('[CaseExporter] Attachment fetch failed for', caseId, attachments.reason?.message);
+  }
+  return activity;
 }
 
 function delay(ms) {
@@ -261,7 +355,9 @@ async function runExport() {
     setProgress(i, total);
 
     try {
-      const data = await fetchCase(orgPrefix, caseId, sessionId);
+      const caseData = await fetchCase(orgPrefix, caseId, sessionId);
+      const activity = await fetchCaseActivity(orgPrefix, caseId, sessionId);
+      const data = { ...caseData, ...activity };
       zip.file((data.CaseNumber || caseId) + '.json', JSON.stringify(data, null, 2));
       successfulCaseNumbers.push(data.CaseNumber || caseId);
     } catch (err) {
@@ -275,7 +371,7 @@ async function runExport() {
         showError('Access denied. Your Salesforce profile may not have API access enabled.');
         return;
       }
-      console.warn('[CaseExporter] Failed to fetch case', caseId, err.message);
+      console.log('[CaseExporter] Failed to fetch case', caseId, err.message);
       failedCaseIds.push(caseId);
     }
 
