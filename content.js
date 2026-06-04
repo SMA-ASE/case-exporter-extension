@@ -150,7 +150,17 @@ if (!window.__caseExporterReady) {
   // Main extraction — try all strategies, regular DOM first, shadow DOM second
   // -------------------------------------------------------------------------
 
+  // Single record page, e.g. /lightning/r/Case/500.../view — export just this
+  // one case, including its attachment binaries (handled in the popup).
+  const CASE_RECORD_RE = /\/r\/Case\/([a-zA-Z0-9]{15,18})(?:\/|$|\?|#)/;
+
   function extractCaseIdsFromPage(limit) {
+    const recordMatch = window.location.pathname.match(CASE_RECORD_RE);
+    if (recordMatch) {
+      console.log('[CaseExporter] Single case record page:', recordMatch[1]);
+      return { caseIds: [recordMatch[1]], viewType: 'record', paginationWarning: false };
+    }
+
     const viewType = detectViewType();
     const allIds = new Set();
 

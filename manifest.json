@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Salesforce Case Exporter",
-  "version": "1.0.1",
-  "description": "Export Salesforce support cases from a Case List View to a downloadable zip of JSON files.",
+  "version": "1.1.0",
+  "description": "Export Salesforce support cases to a downloadable zip. From a Case List View, exports case JSON in bulk; from a single Case page, also downloads all attachment files.",
   "permissions": [
     "activeTab",
     "scripting",
