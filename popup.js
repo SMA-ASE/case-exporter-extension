@@ -142,6 +142,24 @@ async function fetchCase(orgPrefix, caseId, sessionId) {
   return sfGet(orgPrefix, `/services/data/v57.0/sobjects/Case/${caseId}`, sessionId);
 }
 
+// Binary fetch for attachment/file bytes. Same Bearer auth as sfGet, but returns
+// a Blob. Uses the REST VersionData / Body endpoints rather than replaying the
+// browser's cookie-based file.force.com download redirect.
+async function sfGetBlob(orgPrefix, pathOrUrl, sessionId) {
+  const url = pathOrUrl.startsWith('http')
+    ? pathOrUrl
+    : `https://${orgPrefix}.my.salesforce.com${pathOrUrl}`;
+  const response = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${sessionId}` },
+  });
+  if (!response.ok) {
+    if (response.status === 401) throw new Error(`SESSION_EXPIRED (HTTP 401)`);
+    if (response.status === 403) throw new Error(`ACCESS_DENIED (HTTP 403)`);
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.blob();
+}
+
 // Follows nextRecordsUrl until exhausted; returns flat array of all records.
 async function fetchAllSoqlPages(orgPrefix, soql, sessionId) {
   let result = await sfGet(
@@ -234,6 +252,91 @@ async function fetchCaseActivity(orgPrefix, caseId, sessionId) {
     console.log('[CaseExporter] Attachment fetch failed for', caseId, attachments.reason?.message);
   }
   return activity;
+}
+
+// Downloads the actual binary content of a case's attachments into an
+// `attachments/` folder inside the zip. Handles both modern Files
+// (ContentDocument → latest ContentVersion → VersionData) and classic
+// Attachments (Attachment → Body). Each download is isolated so one failure
+// does not abort the rest; failures are returned for the summary.
+async function addCaseFilesToZip(zip, orgPrefix, sessionId, caseData, onProgress) {
+  const folder = zip.folder('attachments');
+  const usedNames = new Set();
+  const downloaded = [];
+  const failed = [];
+
+  // Ensure a unique, collision-free filename within the attachments folder.
+  function uniqueName(rawName) {
+    const name = (rawName || 'file').replace(/[\\/:*?"<>|]/g, '_').trim() || 'file';
+    let candidate = name;
+    let i = 1;
+    while (usedNames.has(candidate.toLowerCase())) {
+      const dot = name.lastIndexOf('.');
+      candidate = dot > 0
+        ? `${name.slice(0, dot)} (${i})${name.slice(dot)}`
+        : `${name} (${i})`;
+      i++;
+    }
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  }
+
+  // 1. Modern Files: resolve ContentDocumentIds → latest ContentVersion rows.
+  const docIds = (caseData.files || []).map(f => f.ContentDocumentId).filter(Boolean);
+  if (docIds.length) {
+    let versions = [];
+    try {
+      const inList = [...new Set(docIds)].map(id => `'${id}'`).join(',');
+      versions = await fetchAllSoqlPages(
+        orgPrefix,
+        `SELECT Id, Title, FileExtension, ContentSize, ContentDocumentId ` +
+        `FROM ContentVersion WHERE ContentDocumentId IN (${inList}) AND IsLatest = true`,
+        sessionId
+      );
+    } catch (e) {
+      console.log('[CaseExporter] ContentVersion lookup failed:', e.message);
+    }
+
+    for (const v of versions) {
+      if (onProgress) onProgress(v.Title || v.Id);
+      try {
+        const blob = await sfGetBlob(
+          orgPrefix,
+          `/services/data/v57.0/sobjects/ContentVersion/${v.Id}/VersionData`,
+          sessionId
+        );
+        const ext = v.FileExtension ? `.${v.FileExtension}` : '';
+        const base = v.Title || v.Id;
+        const fileName = uniqueName(ext && !base.toLowerCase().endsWith(ext.toLowerCase()) ? base + ext : base);
+        folder.file(fileName, blob);
+        downloaded.push(fileName);
+      } catch (e) {
+        if (e.message.startsWith('SESSION_EXPIRED') || e.message.startsWith('ACCESS_DENIED')) throw e;
+        console.log('[CaseExporter] File download failed:', v.Id, e.message);
+        failed.push({ id: v.Id, title: v.Title, error: e.message });
+      }
+    }
+  }
+
+  // 2. Classic Attachments: download each Body directly.
+  for (const a of (caseData.attachments || [])) {
+    if (onProgress) onProgress(a.Name || a.Id);
+    try {
+      const blob = await sfGetBlob(
+        orgPrefix,
+        `/services/data/v57.0/sobjects/Attachment/${a.Id}/Body`,
+        sessionId
+      );
+      folder.file(uniqueName(a.Name || a.Id), blob);
+      downloaded.push(a.Name || a.Id);
+    } catch (e) {
+      if (e.message.startsWith('SESSION_EXPIRED') || e.message.startsWith('ACCESS_DENIED')) throw e;
+      console.log('[CaseExporter] Attachment download failed:', a.Id, e.message);
+      failed.push({ id: a.Id, name: a.Name, error: e.message });
+    }
+  }
+
+  return { downloaded, failed };
 }
 
 function delay(ms) {
@@ -342,9 +445,16 @@ async function runExport() {
     return;
   }
 
+  // On a single case record page we additionally download the attachment
+  // binaries. We deliberately skip this for multi-case list exports, where it
+  // could mean hundreds of large downloads.
+  const isSingleCase = viewType === 'record';
+
   const zip = new JSZip();
   const failedCaseIds = [];
   const successfulCaseNumbers = [];
+  let attachmentsDownloaded = 0;
+  let attachmentsFailed = 0;
   const total = caseIds.length;
 
   for (let i = 0; i < total; i++) {
@@ -360,6 +470,15 @@ async function runExport() {
       const data = { ...caseData, ...activity };
       zip.file((data.CaseNumber || caseId) + '.json', JSON.stringify(data, null, 2));
       successfulCaseNumbers.push(data.CaseNumber || caseId);
+
+      if (isSingleCase) {
+        const result = await addCaseFilesToZip(
+          zip, orgPrefix, sessionId, data,
+          (name) => setStatus(`Downloading attachment: ${name}…`)
+        );
+        attachmentsDownloaded += result.downloaded.length;
+        attachmentsFailed += result.failed.length;
+      }
     } catch (err) {
       if (err.message.startsWith('SESSION_EXPIRED')) {
         setExporting(false);
@@ -399,14 +518,19 @@ async function runExport() {
     viewType,
     paginationWarning,
     failedCaseIds,
+    attachmentsDownloaded,
+    attachmentsFailed,
   }, null, 2));
 
   setStatus('Building zip file…');
   const blob = await zip.generateAsync({ type: 'blob' });
   const blobUrl = URL.createObjectURL(blob);
+  const zipName = isSingleCase
+    ? `salesforce-case-${successfulCaseNumbers[0]}-${formatDate(new Date())}.zip`
+    : `salesforce-cases-${formatDate(new Date())}.zip`;
   await chrome.downloads.download({
     url: blobUrl,
-    filename: `salesforce-cases-${formatDate(new Date())}.zip`,
+    filename: zipName,
     saveAs: false,
   });
   URL.revokeObjectURL(blobUrl);
@@ -414,14 +538,20 @@ async function runExport() {
 
   setExporting(false);
 
+  const attachmentNote = isSingleCase
+    ? ` ${attachmentsDownloaded} attachment${attachmentsDownloaded !== 1 ? 's' : ''} included` +
+      (attachmentsFailed > 0 ? `, ${attachmentsFailed} failed.` : '.')
+    : '';
+
   if (failedCaseIds.length > 0) {
     showSuccess(
       `Exported ${successfulCaseNumbers.length} of ${total} cases. ` +
-      `${failedCaseIds.length} failed — see export-summary.json for details.`
+      `${failedCaseIds.length} failed — see export-summary.json for details.` + attachmentNote
     );
   } else {
     showSuccess(
-      `Exported ${successfulCaseNumbers.length} case${successfulCaseNumbers.length !== 1 ? 's' : ''} successfully.`
+      `Exported ${successfulCaseNumbers.length} case${successfulCaseNumbers.length !== 1 ? 's' : ''} successfully.` +
+      attachmentNote
     );
   }
   setStatus('Done.');
@@ -434,4 +564,7 @@ async function runExport() {
 document.addEventListener('DOMContentLoaded', () => {
   $('exportBtn').addEventListener('click', runExport);
   $('cancelBtn').addEventListener('click', () => { cancelled = true; });
+  try {
+    $('versionLabel').textContent = `v${chrome.runtime.getManifest().version}`;
+  } catch (_) {}
 });
