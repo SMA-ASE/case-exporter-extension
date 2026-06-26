@@ -528,13 +528,29 @@ async function runExport() {
   const zipName = isSingleCase
     ? `salesforce-case-${successfulCaseNumbers[0]}-${formatDate(new Date())}.zip`
     : `salesforce-cases-${formatDate(new Date())}.zip`;
-  await chrome.downloads.download({
-    url: blobUrl,
-    filename: zipName,
-    saveAs: false,
+  let downloadId;
+  try {
+    downloadId = await chrome.downloads.download({
+      url: blobUrl,
+      filename: zipName,
+      saveAs: false,
+    });
+  } catch (dlErr) {
+    URL.revokeObjectURL(blobUrl);
+    showError(`Download failed: ${dlErr.message}`);
+    setExporting(false);
+    return;
+  }
+  // Revoke once Chrome signals it has started reading the blob.
+  // Do not call window.close() here — closing the popup destroys the blob URL's
+  // execution context before Chrome can read it (especially when "Ask where to
+  // save" is enabled and the file dialog briefly collapses the popup).
+  chrome.downloads.onChanged.addListener(function onDownloadStart(delta) {
+    if (delta.id === downloadId && (delta.state || delta.error)) {
+      URL.revokeObjectURL(blobUrl);
+      chrome.downloads.onChanged.removeListener(onDownloadStart);
+    }
   });
-  URL.revokeObjectURL(blobUrl);
-  window.close();
 
   setExporting(false);
 
