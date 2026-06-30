@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- Microsoft Edge (any recent version — Chromium-based)
-- An active Salesforce session in Edge (Okta SSO login already completed)
+- Google Chrome or Microsoft Edge (any recent Chromium-based version)
+- An active Salesforce session in your browser (Okta SSO login already completed)
 
 ---
 
@@ -16,16 +16,19 @@ case-exporter-extension/
 ├── manifest.json
 ├── popup.html
 ├── popup.js
+├── jszip.min.js
 ├── content.js
 └── background.js
 ```
 
 ---
 
-## Step 2 — Enable Developer Mode in Edge
+## Step 2 — Enable Developer Mode
 
-1. Open Edge and go to: `edge://extensions`
-2. Toggle **Developer mode** ON (top-right corner)
+**Chrome:** go to `chrome://extensions`  
+**Edge:** go to `edge://extensions`
+
+Toggle **Developer mode** ON (top-right corner).
 
 ---
 
@@ -35,7 +38,7 @@ case-exporter-extension/
 2. Browse to and select the `case-exporter-extension` folder
 3. The extension appears in your toolbar as **Case Exporter**
 
-> If you don't see it, click the puzzle-piece icon in the Edge toolbar and pin it.
+> If you don't see it, click the puzzle-piece icon in the toolbar and pin it.
 
 ---
 
@@ -65,21 +68,22 @@ case-exporter-extension/
 
 | Symptom | Fix |
 |---|---|
+| "JSZip is not defined" error | `jszip.min.js` is missing from your extension folder — add it and reload the extension |
 | "Navigate to a Salesforce Case List View" error | You must be on a Salesforce page showing cases |
 | "No case IDs found" | Scroll to load cases first; confirm you're in a List/Split/Kanban view |
 | "Session expired" | Refresh your Salesforce tab, then reopen the popup and try again |
 | "Access denied" | Your Salesforce profile may need API access — contact your Salesforce admin |
 | Popup says "Only X cases found" (yellow warning) | Scroll down or click Load More in Salesforce before exporting to capture all records |
-| Extension not visible | Go to `edge://extensions`, confirm it's enabled, and pin it from the puzzle-piece menu |
+| Extension not visible | Go to `chrome://extensions` (Chrome) or `edge://extensions` (Edge), confirm it's enabled, and pin it from the puzzle-piece menu |
 
 ---
 
 ## Updating the extension
 
-If you receive updated extension files, replace the files in the same folder and click the **refresh** icon next to the extension on `edge://extensions`.
+If you receive updated extension files, replace the files in the same folder and click the **refresh** icon next to the extension on `chrome://extensions` (Chrome) or `edge://extensions` (Edge).
 
 ---
 
 ## Security note
 
-This extension operates entirely within your browser using your existing authenticated session. It never stores credentials, never sends data to third-party servers, and only communicates with your Salesforce org's REST API. The only external network call is loading JSZip from cdnjs.cloudflare.com when you click Export.
+This extension operates entirely within your browser using your existing authenticated session. It never stores credentials, never sends data to third-party servers, and only communicates with your Salesforce org's REST API. JSZip (the zip library) is bundled locally — no external network calls are made.
